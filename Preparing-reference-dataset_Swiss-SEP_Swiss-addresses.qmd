@@ -1,0 +1,489 @@
+---
+title: "Preparing reference dataset: Swiss-SEP and Swiss addresses"
+author: "Lorenz Leuenberger"
+date: "`r date()`"
+title-block-banner: "#e4003c"
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: false
+    code-tools: true
+    df-print: paged
+    embed-resources: true
+---
+
+
+# Introduction
+
+The Swiss neighbourhood index of socioeconomic position (Swiss-SEP) is an area-based measure of socioeconomic status for Switzerland. The Swiss-SEP was constructed by [Panczak et al.](https://doi.org/10.1136/jech-2011-200699) in 2012 and re-validated in [2023](https://doi.org/10.57187/smw.2023.40028). The Swiss-SEP used data from national census data and micro-censuses to assign a socioeconomic position to 1.54 million neighborhoods. The Swiss-SEP is a value between 0-100, where higher values relate to a higher socioeconomic position. Each Swiss-SEP value is linked to a geocode of an address (building) in Switzerland.
+
+## Purpose
+
+The purpose of this R script is to link the Swiss-SEP to all Swiss addresses, so that in a second step the clinical data warehouses (CDWs) of the SwissPedHealth project can search for patient addresses and get the linked Swiss-SEP value, see the html document named: "Transforming addresses to Swiss-SEP: Standard operating procedure". To link the Swiss-SEP to all Swiss addresses geocode information of addresses and Swiss-SEP are used.
+
+This R script does not need to be run at the CDWs. The CDWs receive the reference dataset created with this script separately.
+
+A dataset with all addresses in Switzerland and the corresponding geocodes of the building entrance is available from the [Federal Statistical Office (FSO)](https://www.housing-stat.ch/de/madd/public.html). For the last update in the SwissPedHealth project the building register (Gebäude und Wohnungsregister, GWR) was downloaded on 02.10.2025. The geocodes are given in the (CH1903+ / LV95 Swiss coordinate system)[https://www.swisstopo.admin.ch/de/wissen-fakten/geodaesie-vermessung/koordinaten/schweizer-koordinaten.html]. The Swiss-SEP dataset was provided by the Swiss National Cohort team at the Institute of Social and Preventive Medicine of the University of Bern, after signing a data sharing contract.
+
+```{r}
+#| warning: false
+
+library(tidyverse)
+library(here)
+library(sf)
+library(gtsummary)
+library(readr)
+library(data.table)
+library(future.apply)
+
+
+```
+
+# Import and clean data
+
+Import the Swiss-SEP dataset from the Swiss National Cohort:
+```{r}
+#| warning: false
+
+swiss_sep <- read.csv(here("data","raw","ssep_open.csv"))
+
+```
+
+Clean the Swiss-SEP dataset:
+
+```{r}
+#| warning: false
+
+swiss_sep <- swiss_sep %>%
+  rename("geocode_E_sep" = "geox", "geocode_N_sep" = "geoy", "swiss_sep_1" = "ssep1", "swiss_sep_1_decile" = "ssep1_d", "swiss_sep_1_quintile" = "ssep1_q", "swiss_sep_1_tertile" = "ssep1_t", "swiss_sep_2" = "ssep2", "swiss_sep_2_decile" = "ssep2_d", "swiss_sep_2_quintile" = "ssep2_q", "swiss_sep_2_tertile" = "ssep2_t", "swiss_sep_3" = "ssep3", "swiss_sep_3_decile" = "ssep3_d", "swiss_sep_3_quintile" = "ssep3_q", "swiss_sep_3_tertile" = "ssep3_t",)
+
+```
+
+
+Import the addresses dataset from the FSO:
+
+```{r}
+#| warning: false
+
+# ch
+addresses <- read_tsv(here("data","raw","ch_02-10-2025","eingang_entree_entrata.csv"))
+buildings <- read_tsv(here("data","raw","ch_02-10-2025","gebaeude_batiment_edificio.csv"))
+
+```
+
+
+Clean the datasets:
+
+```{r}
+#| warning: false
+
+addresses <- addresses %>%
+  select(EGID, STRNAME, STRNAMK, DEINR, DPLZ4, DPLZNAME, DKODE, DKODN, DOFFADR) %>%
+  rename("street" = "STRNAME", "street_short" = "STRNAMK", "number" = "DEINR", "plz" = "DPLZ4", "city" = "DPLZNAME", "geocode_E_address" = "DKODE", "geocode_N_address" = "DKODN", "official_address" = "DOFFADR")
+
+
+addresses[addresses == ""] <- NA
+
+buildings <- buildings %>%
+  select(EGID, GKODE, GKODN) %>%
+  rename("geocode_E_building" = "GKODE", "geocode_N_building" = "GKODN")
+
+
+buildings[buildings == ""] <- NA
+
+```
+
+Some of the building entrances do not have coordinates. Therefore, the building dataset is used to find the coordinates of the buildings for those addresses, instead of the entrance dataset.
+
+```{r}
+#| warning: false
+
+addresses <- left_join(addresses, buildings, by = "EGID")
+
+addresses <- addresses %>% 
+  mutate(geocode_E_address = case_when(is.na(geocode_E_address)==TRUE ~ geocode_E_building,
+                                       TRUE ~ geocode_E_address),
+         geocode_N_address = case_when(is.na(geocode_N_address)==TRUE ~ geocode_N_building,
+                                       TRUE ~ geocode_N_address))
+
+missing_geo <- addresses %>% 
+  filter((is.na(geocode_E_address)==TRUE | is.na(geocode_N_address)==TRUE))
+
+```
+
+23 addresses don't have coordinates for the entrance nor for the building.
+Those addresses were searched and manually added from [map.geo.admin](https://map.geo.admin.ch/).
+
+```{r}
+#| warning: false
+
+addresses <- addresses %>% 
+  mutate(geocode_E_address = case_when(EGID == 192021721 ~ 2666314,
+                                       EGID == 192032326 ~ 2705862,
+                                       EGID == 192034223 ~ 2704159,
+                                       EGID == 192037068 ~ 2699713,
+                                       EGID == 192040785 ~ 2659330,
+                                       EGID == 192041224 ~ 2645701,
+                                       EGID == 192045031 ~ 2701782,
+                                       EGID == 192045163 ~ 2649155,
+                                       EGID == 192045180 ~ 2711737,
+                                       EGID == 192045205 ~ 2668599,
+                                       EGID == 192045230 ~ 2639526,
+                                       EGID == 192045248 ~ 2575586,
+                                       EGID == 192045254 ~ 2625845,
+                                       EGID == 192045262 ~ 2591553,
+                                       EGID == 192045347 ~ 2625845,
+                                       EGID == 192045349 ~ 2639262,
+                                       EGID == 192045371 ~ 2626471,
+                                       EGID == 192045414 ~ 2646240,
+                                       EGID == 192045417 ~ 2626609,
+                                       EGID == 192045434 ~ 2597951,
+                                       TRUE ~ geocode_E_address),
+         geocode_N_address = case_when(EGID == 192021721 ~ 1267637,
+                                       EGID == 192032326 ~ 1279102,
+                                       EGID == 192034223 ~ 1237113,
+                                       EGID == 192037068 ~ 1282350,
+                                       EGID == 192040785 ~ 1245389,
+                                       EGID == 192041224 ~ 1247200,
+                                       EGID == 192045031 ~ 1232964,
+                                       EGID == 192045163 ~ 1224396,
+                                       EGID == 192045180 ~ 1236595,
+                                       EGID == 192045205 ~ 1255637,
+                                       EGID == 192045230 ~ 1236450,
+                                       EGID == 192045248 ~ 1182666,
+                                       EGID == 192045254 ~ 1266623,
+                                       EGID == 192045262 ~ 1216731,
+                                       EGID == 192045347 ~ 1266623,
+                                       EGID == 192045349 ~ 1265262,
+                                       EGID == 192045371 ~ 1266157,
+                                       EGID == 192045414 ~ 1245467,
+                                       EGID == 192045417 ~ 1266442,
+                                       EGID == 192045434 ~ 1199457,
+                                       TRUE ~ geocode_N_address))
+
+```
+
+There are multiple thousands addresses that belong to street names or highway location markers.
+Only addresses with complete street, plz, and city were kept. Addresses with missing house numbers are not excluded, because there exist correct addresses without any house number.
+
+```{r}
+#| warning: false
+
+addresses <- addresses %>%
+  filter(is.na(street)==FALSE & is.na(plz)==FALSE & is.na(city)==FALSE & is.na(geocode_E_address)==FALSE)
+
+```
+
+
+Identify all the characters in the street and city names.
+Replace "Umlaute" with the written-out spelling and special characters with an empty string.
+
+```{r}
+#| warning: false
+
+# street
+
+# street_characters <- addresses %>%
+#   select(street) %>%
+#   unlist %>%
+#   strsplit('') %>%
+#   unlist() %>%
+#   unique()
+#   
+# street_characters
+
+replace_special_characters <- function(text){
+  
+  new_text = gsub('ä', 'ae', text) 
+  new_text = gsub('á', 'a', new_text) 
+  new_text = gsub('à', 'a', new_text) 
+  new_text = gsub('â', 'a', new_text) 
+  new_text = gsub('Ä', 'AE', new_text) 
+  new_text = gsub('Á', 'A', new_text)
+  new_text = gsub('À', 'A', new_text)
+  new_text = gsub('Â', 'A', new_text)
+  new_text = gsub('ë', 'e', new_text)
+  new_text = gsub('é', 'e', new_text)
+  new_text = gsub('è', 'e', new_text)
+  new_text = gsub('ê', 'e', new_text)
+  new_text = gsub('Ë', 'E', new_text)
+  new_text = gsub('É', 'E', new_text)
+  new_text = gsub('È', 'E', new_text)
+  new_text = gsub('Ê', 'E', new_text)
+  new_text = gsub('ï', 'i', new_text)
+  new_text = gsub('í', 'i', new_text)
+  new_text = gsub('ì', 'i', new_text)
+  new_text = gsub('î', 'i', new_text)
+  new_text = gsub('Ï', 'I', new_text)
+  new_text = gsub('Í', 'I', new_text)
+  new_text = gsub('Ì', 'I', new_text)
+  new_text = gsub('Î', 'I', new_text)
+  new_text = gsub('ö', 'oe', new_text)
+  new_text = gsub('ó', 'o', new_text)
+  new_text = gsub('ò', 'o', new_text)
+  new_text = gsub('ô', 'o', new_text)
+  new_text = gsub('Ö', 'OE', new_text)
+  new_text = gsub('Ó', 'O', new_text)
+  new_text = gsub('Ò', 'O', new_text)
+  new_text = gsub('Ô', 'O', new_text)
+  new_text = gsub('ü', 'ue', new_text)
+  new_text = gsub('ú', 'u', new_text)
+  new_text = gsub('ù', 'u', new_text)
+  new_text = gsub('û', 'u', new_text)
+  new_text = gsub('Ü', 'UE', new_text)
+  new_text = gsub('Ú', 'U', new_text)
+  new_text = gsub('Ù', 'U', new_text)
+  new_text = gsub('Û', 'U', new_text)
+  new_text = gsub('ç', "c", new_text)
+  new_text = gsub("[.]", '', new_text)
+  new_text = gsub(",", "", new_text)
+  new_text = gsub(' ', '', new_text)
+  new_text = gsub('-', '', new_text)
+  new_text = gsub('_', '', new_text)
+  new_text = gsub("'", "", new_text)
+  new_text = gsub("[+]","", new_text)
+  new_text = gsub("[/]","", new_text)
+  new_text = gsub("[(]","", new_text)
+  new_text = gsub("[)]","", new_text)
+  
+  return(new_text)
+}
+
+addresses_tbl <- data.table(addresses)
+
+# Use a parallel version of the apply function in the future.apply package
+
+plan(multisession)
+
+# match with the custom functions
+addresses_tbl[, street_without_special := future_mapply(replace_special_characters, text = street)]
+
+# street_short
+
+addresses_tbl[, street_short_without_special := future_mapply(replace_special_characters, text = street_short)]
+
+
+# city
+
+addresses_tbl[, city_without_special := future_mapply(replace_special_characters, text = city)]
+
+addresses <- data.frame(addresses_tbl)
+
+```
+
+
+Set all characters to lower case.
+Create a number variable, that ignores added characters after the first number (e.g., "13.a" will be "13").
+
+```{r}
+#| warning: false
+
+addresses <- addresses %>%
+  rowwise() %>%
+  mutate(street_without_special = tolower(street_without_special),
+         street_short_without_special = tolower(street_short_without_special),
+         city_without_special = tolower(city_without_special)) %>%
+  ungroup()
+
+
+remove_after_non_digit <- function(text) {
+  gsub("\\D.*", "", text)
+}
+
+addresses <- addresses %>%
+  mutate(street_len = nchar(street_without_special),
+         street_short_len = nchar(street_short_without_special),
+         number_int = remove_after_non_digit(number),
+         number_int = case_when(number_int == "" ~ NA,
+                                            TRUE ~ number_int),
+         number_int = as.integer(number_int),
+         city_len = nchar(city_without_special))
+
+head(addresses)
+
+
+
+```
+
+
+For addresses that occur multiple times, only the ones that are flagged as official addresses by the FSO are kept:
+
+```{r}
+#| warning: false
+
+addresses <- addresses %>%
+  rowwise() %>%
+  mutate(address_text = paste(street_without_special, number, plz, city_without_special, collapse =" ")) %>%
+  ungroup()
+
+addresses <- addresses %>%
+  group_by(address_text) %>%
+  arrange(desc(official_address)) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(-official_address, -address_text)
+
+
+addresses <- tibble::rowid_to_column(addresses, "address_id")
+
+```
+
+
+# Merge Swiss-SEP to addresses
+
+The two datasets are merged by searching for the nearest geocode of Swiss-SEP to the geocode of the address.
+The EPSG (European Petroleum Survey Group) code for the Swiss coordinate system is 2056.
+
+```{r}
+#| warning: false
+
+addresses_sf <- addresses %>%
+  st_as_sf(coords = c("geocode_E_address","geocode_N_address"), remove = FALSE, crs = 2056)
+
+swiss_sep_sf <- swiss_sep %>%
+  st_as_sf(coords = c("geocode_E_sep", "geocode_N_sep"), remove = FALSE, crs = 2056)
+
+addresses_and_swiss_sep <- st_join(addresses_sf, swiss_sep_sf, join=st_nearest_feature)
+
+addresses_and_swiss_sep <- addresses_and_swiss_sep %>%
+  mutate(distance_address_swiss_sep = sqrt((geocode_E_address - geocode_E_sep)^2 + (geocode_N_address - geocode_N_sep)^2))
+
+
+```
+
+# Illustration
+
+Load the map of the city of Bern and plot the addresses and Swiss-SEP positions of the Längasse Quartier.
+
+```{r}
+#| warning: false
+#| output: false
+
+st_layers(here("data", "raw", "swiss-map-vector10_2022_1166_2056.gpkg", "1166", "SMV10_CHLV95LN02.gpkg"))
+
+```
+
+
+```{r}
+#| warning: false
+
+map_bern_buildings <- st_read(here("data", "raw", "swiss-map-vector10_2022_1166_2056.gpkg", "1166", "SMV10_CHLV95LN02.gpkg"), layer = "T48_DKM10_GEBAEUDE")
+map_bern_streets <- st_read(here("data", "raw", "swiss-map-vector10_2022_1166_2056.gpkg", "1166", "SMV10_CHLV95LN02.gpkg"), layer = "T45_DKM10_STRASSE")
+
+map_längasse_buildings <- st_crop(map_bern_buildings, xmin = 2599500, xmax = 2600000, ymin = 1200280, ymax = 1200760)
+map_längasse_streets <- st_crop(map_bern_streets, xmin = 2599500, xmax = 2600000, ymin = 1200280, ymax = 1200760)
+
+addresses_and_swiss_sep_längasse <- st_crop(addresses_and_swiss_sep, xmin = 2599500, xmax = 2600000, ymin = 1200280, ymax = 1200760)
+
+addresses_längasse <- addresses_and_swiss_sep_längasse %>%
+  select(geocode_E_address, geocode_N_address) %>%
+  st_drop_geometry() %>%
+  st_as_sf(coords = c("geocode_E_address", "geocode_N_address"), remove = FALSE, crs = 2056)
+
+swiss_sep_längasse <- addresses_and_swiss_sep_längasse %>%
+  select(geocode_E_sep, geocode_N_sep) %>%
+  st_drop_geometry() %>%
+  st_as_sf(coords = c("geocode_E_sep", "geocode_N_sep"), remove = FALSE, crs = 2056)
+
+plot_längasse_addresses <- ggplot()+
+  geom_sf(data=map_längasse_buildings, fill="white", default_crs = 2056)+
+  geom_sf(data=map_längasse_streets)+
+  geom_sf(data=addresses_längasse, size = 2, shape = 21, fill="red")
+
+plot_längasse_addresses_swiss_sep <- plot_längasse_addresses+
+  geom_sf(data=swiss_sep_längasse, size = 2, shape = 24, fill="blue")
+
+plot_längasse_addresses
+
+plot_längasse_addresses_swiss_sep
+
+address_mittelstrasse_58 <- addresses_and_swiss_sep_längasse %>%
+  filter(street == "Mittelstrasse" & number == "58") %>% 
+  select(geocode_E_address, geocode_N_address) %>%
+  st_drop_geometry() %>%
+  st_as_sf(coords = c("geocode_E_address", "geocode_N_address"), remove = FALSE, crs = 2056)
+  
+swiss_sep_mittelstrasse_58 <- addresses_and_swiss_sep_längasse %>%
+  filter(street == "Mittelstrasse" & number == "58") %>% 
+  select(geocode_E_sep, geocode_N_sep) %>%
+  st_drop_geometry() %>%
+  st_as_sf(coords = c("geocode_E_sep", "geocode_N_sep"), remove = FALSE, crs = 2056)
+
+plot_mittelstrasse_58_address <- ggplot()+
+  geom_sf(data=map_längasse_buildings, fill="white", default_crs = 2056)+
+  geom_sf(data=map_längasse_streets)+
+  geom_sf(data=address_mittelstrasse_58, size = 2, shape = 21, fill="red")
+
+plot_mittelstrasse_58_address
+
+plot_mittelstrasse_58_address_swiss_sep <- plot_mittelstrasse_58_address+
+    geom_sf(data=swiss_sep_mittelstrasse_58, size = 2, shape = 24, fill="blue")
+
+plot_mittelstrasse_58_address_swiss_sep
+
+plot_mittelstrasse_58_address_all_swiss_sep <- plot_mittelstrasse_58_address+
+    geom_sf(data=swiss_sep_längasse, size = 2, shape = 24, fill="blue")
+
+plot_mittelstrasse_58_address_all_swiss_sep
+  
+
+```
+
+# Save dataset
+
+Create integers of the Swiss-SEP and distance variables as this was described in the concept description for the SPHN RDF Schema to reduce the risk of re-identification.
+
+```{r}
+
+addresses_and_swiss_sep <- addresses_and_swiss_sep %>% 
+  st_drop_geometry()
+
+addresses_and_swiss_sep <- addresses_and_swiss_sep |> 
+  mutate(swiss_sep_1 = as.integer(swiss_sep_1),
+         swiss_sep_2 = as.integer(swiss_sep_2),
+         swiss_sep_3 = as.integer(swiss_sep_3),
+         distance_address_swiss_sep = as.integer(distance_address_swiss_sep))
+
+```
+
+
+Select the variables and save the dataset after selecting variables:
+
+```{r}
+#| warning: false
+
+
+
+addresses_and_swiss_sep <- addresses_and_swiss_sep %>%
+  select(address_id, street, street_without_special, street_len, street_short, street_short_without_special, street_short_len, number, number_int, plz, city, city_without_special, city_len, swiss_sep_1, swiss_sep_2, swiss_sep_3, distance_address_swiss_sep, geocode_E_address, geocode_N_address) %>%
+  rename("address_id_reference" = "address_id", "street_original" = "street","street_reference" = "street_without_special", "street_len_reference" = "street_len", "street_short_original" = "street_short","street_short_reference" = "street_short_without_special", "street_short_len_reference" = "street_short_len", "number_reference" = "number", "number_int_reference" = "number_int", "plz_reference" = "plz", "city_original" = "city","city_reference" = "city_without_special", "city_len_reference" = "city_len")
+
+
+write.table(addresses_and_swiss_sep, file = here("data","processed","addresses_and_swiss_sep.csv"), sep = ";", row.names = FALSE, quote = FALSE)
+
+saveRDS(addresses_and_swiss_sep, here("data","processed","addresses_and_swiss_sep.rds"))
+
+
+```
+
+Export the dataset after deleting the Swiss-SEP variables and adding random numbers.
+This dataset with random numbers is used to demonstrate the next R script: "Transforming addresses to Swiss-SEP: Standard operating procedure".
+
+```{r}
+#| warning: false
+
+addresses_and_swiss_sep_random <- addresses_and_swiss_sep %>%
+  mutate(swiss_sep_1 = sample(seq(0:100), size = 3285111, replace = TRUE),
+         swiss_sep_2 = swiss_sep_1,
+         swiss_sep_3 = swiss_sep_1,
+         distance_address_swiss_sep = sample(seq(0:500), size = 3285111, replace = TRUE))
+
+
+write.table(addresses_and_swiss_sep_random, file = here("data","processed","addresses_and_swiss_sep_random.csv"), sep = ";", row.names = FALSE, quote = FALSE)
+
+saveRDS(addresses_and_swiss_sep_random, here("data","processed","addresses_and_swiss_sep_random.rds"))
+
+```
+
+
