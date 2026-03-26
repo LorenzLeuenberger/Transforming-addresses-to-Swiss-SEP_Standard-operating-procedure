@@ -7,7 +7,7 @@ The purpose of this standard operating procedure is to standardize how the Swiss
 - .qmd scripts used to create the SOP,
 - R and python code to run this SOP.
 
-This SOP will be published on BORIS, the Bern Open Repository and Information System.
+This SOP is published on BORIS, the Bern Open Repository and Information System: [https://doi.org/10.48620/96324](https://doi.org/10.48620/96324)
 
 # Results
 The SOP was piloted at the Inselspital, Bern University Hospital with 50,000 addresses of patients. More than 98% of addresses were successfully matched to an address in the reference dataset and got linked to a Swiss-SEP value. In SwissPedHealth, including more than 600,000 patients, three out of seven hospitals achieved to link the Swiss-SEP to 95–98% of addresses. Two hospitals close to the boarder of neighboring countries had a lower linkage proportion of 88–90%, likely because of patients without a Swiss address. One hospital reported difficulties implementing the SOP and linked the Swiss-SEP only to 54% of addresses. One hospital was unable to implement the SOP due to limited resources. Many hospitals reported that the SOP was computationally demanding.
